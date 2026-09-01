@@ -96,7 +96,7 @@ class IndianStockPipeline:
         """
         logging.info("Fetching listed stocks from NSE...")
         # NSE Bhavcopy or Equity List URL (using a static link for active equities)
-        url = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
+        url = "https://archives.nseindia.com/content/equities/EQUITY_L.csv"
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
