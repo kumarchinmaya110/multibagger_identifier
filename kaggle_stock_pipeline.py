@@ -1,3 +1,20 @@
+import sys
+import subprocess
+import logging
+
+# Ensure required packages are installed before importing them
+def install_requirements():
+    required_packages = ['pandas', 'numpy', 'yfinance', 'beautifulsoup4', 'feedparser', 'transformers', 'nltk', 'openpyxl', 'torch']
+    for package in required_packages:
+        try:
+            __import__(package if package != 'beautifulsoup4' else 'bs4')
+        except ImportError:
+            print(f"Installing missing package: {package}...")
+            subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
+            print(f"Successfully installed {package}.")
+
+install_requirements()
+
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -8,7 +25,6 @@ import feedparser
 import urllib.parse
 from datetime import datetime, timedelta
 import time
-import logging
 import warnings
 import os
 from transformers import pipeline
