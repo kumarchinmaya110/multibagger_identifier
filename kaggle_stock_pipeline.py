@@ -97,7 +97,7 @@ class IndianStockPipeline:
         stocks['Yahoo_Ticker'] = stocks['Symbol'] + '.NS'
         return stocks
 
-    def fetch_market_data(self, ticker_symbol, fetch_timestamp):
+    def fetch_market_data(self, ticker_symbol):
         """
         Collect historical price data and fundamentals data using yfinance.
         """
@@ -108,15 +108,27 @@ class IndianStockPipeline:
 
         # Fundamentals
         info = ticker.info
+
+        # Determine the event date for the fundamentals
+        # Prefer most recent quarter, fallback to last fiscal year end, or use a known epoch if missing
+        event_timestamp = None
+        if info.get('mostRecentQuarter'):
+            event_timestamp = datetime.fromtimestamp(info.get('mostRecentQuarter')).strftime('%Y-%m-%d')
+        elif info.get('lastFiscalYearEnd'):
+            event_timestamp = datetime.fromtimestamp(info.get('lastFiscalYearEnd')).strftime('%Y-%m-%d')
+        else:
+            # If yfinance doesn't provide the financial reporting date, we denote it as unknown
+            event_timestamp = 'Unknown'
+
         fundamentals = {
             'Symbol': ticker_symbol,
+            'Event_Date': event_timestamp,
             'MarketCap': info.get('marketCap'),
             'PE_Ratio': info.get('trailingPE'),
             'PB_Ratio': info.get('priceToBook'),
             'Dividend_Yield': info.get('dividendYield'),
             'Sector': info.get('sector'),
-            'Industry': info.get('industry'),
-            'Date_Collected': fetch_timestamp
+            'Industry': info.get('industry')
         }
         fund_df = pd.DataFrame([fundamentals])
 
@@ -199,13 +211,12 @@ class IndianStockPipeline:
             symbol = row['Symbol']
             yahoo_ticker = row['Yahoo_Ticker']
             listing_date = row['ListingDate']
-            fetch_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
             logging.info(f"Processing {symbol} ({yahoo_ticker})...")
 
             # 1. Fetch Market Data & Fundamentals
             try:
-                hist, fund_df = self.fetch_market_data(yahoo_ticker, fetch_timestamp)
+                hist, fund_df = self.fetch_market_data(yahoo_ticker)
                 if hist.empty:
                     logging.warning(f"No price data found for {symbol}. Skipping.")
                     continue
@@ -217,10 +228,10 @@ class IndianStockPipeline:
 
                 # Save Price Data
                 hist['Symbol'] = symbol
-                hist['Date_Collected'] = fetch_timestamp
                 hist.reset_index(inplace=True)
-                # Convert datetime with timezone to string to save to sqlite safely
-                hist['Date'] = hist['Date'].dt.strftime('%Y-%m-%d')
+                # Convert datetime with timezone to string to save to sqlite safely, renamed to Event_Date
+                hist['Event_Date'] = hist['Date'].dt.strftime('%Y-%m-%d')
+                hist.drop(columns=['Date'], inplace=True)
                 hist.to_sql('historical_prices', self.conn, if_exists='append', index=False)
 
                 # Save Fundamentals
@@ -254,8 +265,7 @@ class IndianStockPipeline:
                     document_records.append({
                         'Symbol': symbol,
                         'Year': year,
-                        'Date': doc['Published'],
-                        'Date_Collected': fetch_timestamp,
+                        'Event_Date': doc['Published'], # Use the publication date as the event timestamp
                         'Source': doc['Source'],
                         'Doc_Type': doc['Doc_Type'],
                         'Vader_Compound': v_comp,
@@ -273,12 +283,11 @@ class IndianStockPipeline:
             self.coverage_data.append({
                 'Symbol': symbol,
                 'Listing_Date': listing_date.strftime('%Y-%m-%d') if pd.notnull(listing_date) else 'Unknown',
-                'Price_Data_Start': hist['Date'].min(),
-                'Price_Data_End': hist['Date'].max(),
+                'Price_Data_Start': hist['Event_Date'].min(),
+                'Price_Data_End': hist['Event_Date'].max(),
                 'Total_Trading_Days': len(hist),
                 'Has_Fundamentals': not fund_df.empty,
-                'Documents_Processed': total_documents_found,
-                'Date_Collected': fetch_timestamp
+                'Documents_Processed': total_documents_found
             })
 
             count += 1
