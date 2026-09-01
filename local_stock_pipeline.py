@@ -1,6 +1,7 @@
 import sys
 import subprocess
 import logging
+import os
 
 # Ensure required packages are installed before importing them
 def install_requirements():
@@ -26,7 +27,6 @@ import urllib.parse
 from datetime import datetime, timedelta
 import time
 import warnings
-import os
 from transformers import pipeline
 import nltk
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
@@ -38,9 +38,12 @@ warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class IndianStockPipeline:
-    def __init__(self, db_name='indian_stocks_data.db'):
-        self.db_name = db_name
-        self.conn = sqlite3.connect(self.db_name)
+    def __init__(self, db_name='indian_stocks_data.db', report_name='Data_Coverage_Report.xlsx'):
+        # Force files to reside in the same folder where the script is saved
+        self.base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.db_path = os.path.join(self.base_dir, db_name)
+        self.report_path = os.path.join(self.base_dir, report_name)
+        self.conn = sqlite3.connect(self.db_path)
 
         # Initialize NLP Models
         logging.info("Initializing NLP models...")
@@ -52,7 +55,6 @@ class IndianStockPipeline:
         self.vader = SentimentIntensityAnalyzer()
 
         # FinBERT for financial sentiment
-        # In a real Kaggle notebook, GPU (device=0) is recommended if available
         try:
             self.finbert = pipeline("sentiment-analysis", model="ProsusAI/finbert", device=-1)
         except Exception as e:
@@ -60,6 +62,32 @@ class IndianStockPipeline:
             self.finbert = None
 
         self.coverage_data = []
+
+        # Load existing coverage data if present to allow resuming
+        self._load_existing_progress()
+
+    def _load_existing_progress(self):
+        self.processed_symbols = set()
+        if os.path.exists(self.report_path):
+            try:
+                df = pd.read_excel(self.report_path)
+                if 'Symbol' in df.columns:
+                    self.processed_symbols = set(df['Symbol'].tolist())
+                    self.coverage_data = df.to_dict('records')
+                    logging.info(f"Loaded {len(self.processed_symbols)} previously processed stocks from report to resume.")
+            except Exception as e:
+                logging.warning(f"Failed to load existing coverage report: {e}")
+        else:
+            # Also check DB just in case
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute("SELECT DISTINCT Symbol FROM fundamentals")
+                rows = cursor.fetchall()
+                if rows:
+                    self.processed_symbols = set([r[0] for r in rows])
+                    logging.info(f"Loaded {len(self.processed_symbols)} previously processed stocks from database to resume.")
+            except Exception:
+                pass # Table might not exist yet
 
     def get_stock_list(self):
         """
@@ -74,14 +102,13 @@ class IndianStockPipeline:
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
         }
 
+        csv_path = os.path.join(self.base_dir, 'EQUITY_L.csv')
         try:
-            # For demonstration, we'll try to fetch the NSE list. If it fails due to bot-protection,
-            # we will fallback to a predefined list.
             response = requests.get(url, headers=headers, timeout=10)
             if response.status_code == 200:
-                with open('EQUITY_L.csv', 'wb') as f:
+                with open(csv_path, 'wb') as f:
                     f.write(response.content)
-                df = pd.read_csv('EQUITY_L.csv')
+                df = pd.read_csv(csv_path)
                 symbols = df['SYMBOL'].tolist()
                 dates = df[' DATE OF LISTING'].tolist()
                 stocks = pd.DataFrame({'Symbol': symbols, 'ListingDate': dates})
@@ -110,14 +137,12 @@ class IndianStockPipeline:
         info = ticker.info
 
         # Determine the event date for the fundamentals
-        # Prefer most recent quarter, fallback to last fiscal year end, or use a known epoch if missing
         event_timestamp = None
         if info.get('mostRecentQuarter'):
             event_timestamp = datetime.fromtimestamp(info.get('mostRecentQuarter')).strftime('%Y-%m-%d')
         elif info.get('lastFiscalYearEnd'):
             event_timestamp = datetime.fromtimestamp(info.get('lastFiscalYearEnd')).strftime('%Y-%m-%d')
         else:
-            # If yfinance doesn't provide the financial reporting date, we denote it as unknown
             event_timestamp = 'Unknown'
 
         fundamentals = {
@@ -138,7 +163,6 @@ class IndianStockPipeline:
         """
         Collect historical news, annual reports, or media presentations using Google News RSS.
         Aims to get at least 10 items per year.
-        doc_type can be "news", "annual report", or "media presentation".
         """
         if doc_type == "news":
             query = f"{company_name} stock OR finance OR market"
@@ -159,7 +183,7 @@ class IndianStockPipeline:
         feed = feedparser.parse(rss_url)
         articles = []
 
-        for entry in feed.entries[:15]:  # Try to get up to 15 to ensure at least 10 valid ones
+        for entry in feed.entries[:15]:
             articles.append({
                 'Title': entry.title,
                 'Published': entry.published if hasattr(entry, 'published') else f"{year}-06-01",
@@ -172,8 +196,6 @@ class IndianStockPipeline:
     def analyze_sentiment(self, text):
         """
         Use NLP to rank news articles based on their sentiments using multiple criteria.
-        Criteria 1: VADER Compound Score
-        Criteria 2: FinBERT Label & Score
         """
         if not text or not isinstance(text, str):
             return 0.0, 'Neutral', 0.0
@@ -187,28 +209,41 @@ class IndianStockPipeline:
         finbert_score = 0.0
         if self.finbert:
             try:
-                # Truncate text to 512 tokens for BERT
                 result = self.finbert(text[:1500])[0]
                 finbert_label = result['label']
                 finbert_score = result['score']
-            except Exception as e:
+            except Exception:
                 pass
 
         return vader_compound, finbert_label, finbert_score
 
+    def _save_checkpoint(self):
+        """Save the Excel report and commit database."""
+        logging.info("Saving checkpoint...")
+        self.conn.commit() # Ensure DB changes are flushed to disk
+        coverage_df = pd.DataFrame(self.coverage_data)
+        coverage_df.to_excel(self.report_path, index=False)
+        logging.info(f"Checkpoint saved successfully to {self.report_path} and {self.db_path}.")
+
     def run_pipeline(self, max_stocks=None):
         """
         Main pipeline function.
-        max_stocks: Optional parameter to limit execution time in testing.
+        max_stocks: Optional parameter to limit execution time.
         """
         stocks_df = self.get_stock_list()
 
-        count = 0
+        processed_in_this_run = 0
+
         for idx, row in stocks_df.iterrows():
-            if max_stocks and count >= max_stocks:
+            symbol = row['Symbol']
+
+            if symbol in self.processed_symbols:
+                logging.info(f"Skipping {symbol} as it is already processed.")
+                continue
+
+            if max_stocks and processed_in_this_run >= max_stocks:
                 break
 
-            symbol = row['Symbol']
             yahoo_ticker = row['Yahoo_Ticker']
             listing_date = row['ListingDate']
 
@@ -221,7 +256,6 @@ class IndianStockPipeline:
                     logging.warning(f"No price data found for {symbol}. Skipping.")
                     continue
 
-                # Determine actual listing year from data if listed_date is missing
                 actual_start_year = hist.index.min().year
                 if pd.isna(listing_date):
                     listing_date = hist.index.min()
@@ -229,7 +263,6 @@ class IndianStockPipeline:
                 # Save Price Data
                 hist['Symbol'] = symbol
                 hist.reset_index(inplace=True)
-                # Convert datetime with timezone to string to save to sqlite safely, renamed to Event_Date
                 hist['Event_Date'] = hist['Date'].dt.strftime('%Y-%m-%d')
                 hist.drop(columns=['Date'], inplace=True)
                 hist.to_sql('historical_prices', self.conn, if_exists='append', index=False)
@@ -249,7 +282,6 @@ class IndianStockPipeline:
             total_documents_found = 0
 
             for year in range(start_year, current_year + 1):
-                # Fetch different document types
                 documents = []
                 documents.extend(self.fetch_historical_documents(symbol, year, doc_type="news"))
                 documents.extend(self.fetch_historical_documents(symbol, year, doc_type="annual report"))
@@ -259,20 +291,17 @@ class IndianStockPipeline:
 
                 for doc in documents:
                     title = doc['Title']
-                    # Calculate Sentiments
                     v_comp, fb_label, fb_score = self.analyze_sentiment(title)
 
                     document_records.append({
                         'Symbol': symbol,
                         'Year': year,
-                        'Event_Date': doc['Published'], # Use the publication date as the event timestamp
+                        'Event_Date': doc['Published'],
                         'Source': doc['Source'],
                         'Doc_Type': doc['Doc_Type'],
                         'Vader_Compound': v_comp,
                         'Finbert_Label': fb_label,
                         'Finbert_Score': fb_score
-                        # Note: We purposely DO NOT save the detailed text/title to the DB
-                        # to keep the database size small, as requested.
                     })
 
             if document_records:
@@ -290,15 +319,19 @@ class IndianStockPipeline:
                 'Documents_Processed': total_documents_found
             })
 
-            count += 1
+            self.processed_symbols.add(symbol)
+            processed_in_this_run += 1
+
+            # Save checkpoint every 50 stocks
+            if processed_in_this_run % 50 == 0:
+                self._save_checkpoint()
+
             # Sleep to prevent API rate limiting
             time.sleep(2)
 
-        # 4. Generate Coverage Report
-        logging.info("Generating Data Coverage Report...")
-        coverage_df = pd.DataFrame(self.coverage_data)
-        coverage_df.to_excel('Data_Coverage_Report.xlsx', index=False)
-        logging.info("Pipeline Complete. Files generated: indian_stocks_data.db, Data_Coverage_Report.xlsx")
+        # 4. Final Save
+        self._save_checkpoint()
+        logging.info(f"Pipeline Complete. Files generated/updated: {self.db_path}, {self.report_path}")
 
     def close(self):
         """Explicitly close the database connection."""
@@ -306,11 +339,16 @@ class IndianStockPipeline:
             self.conn.close()
 
 if __name__ == "__main__":
-    # To run on Kaggle, simply execute this script.
-    # To process all stocks, do not pass max_stocks. (Note: Processing all stocks will take a long time).
+    # To run locally, simply execute this script.
+    # It will automatically resume from where it left off.
     pipeline_runner = IndianStockPipeline()
     try:
-        # Example for Kaggle execution. It will process all by default unless max_stocks is provided.
         pipeline_runner.run_pipeline()
+    except KeyboardInterrupt:
+        logging.info("Process interrupted by user. Saving final checkpoint before exit...")
+        pipeline_runner._save_checkpoint()
+    except Exception as e:
+        logging.error(f"An unexpected error occurred: {e}")
+        pipeline_runner._save_checkpoint()
     finally:
         pipeline_runner.close()
