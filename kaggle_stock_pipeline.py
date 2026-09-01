@@ -97,7 +97,7 @@ class IndianStockPipeline:
         stocks['Yahoo_Ticker'] = stocks['Symbol'] + '.NS'
         return stocks
 
-    def fetch_market_data(self, ticker_symbol):
+    def fetch_market_data(self, ticker_symbol, fetch_timestamp):
         """
         Collect historical price data and fundamentals data using yfinance.
         """
@@ -115,7 +115,8 @@ class IndianStockPipeline:
             'PB_Ratio': info.get('priceToBook'),
             'Dividend_Yield': info.get('dividendYield'),
             'Sector': info.get('sector'),
-            'Industry': info.get('industry')
+            'Industry': info.get('industry'),
+            'Date_Collected': fetch_timestamp
         }
         fund_df = pd.DataFrame([fundamentals])
 
@@ -198,12 +199,13 @@ class IndianStockPipeline:
             symbol = row['Symbol']
             yahoo_ticker = row['Yahoo_Ticker']
             listing_date = row['ListingDate']
+            fetch_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
             logging.info(f"Processing {symbol} ({yahoo_ticker})...")
 
             # 1. Fetch Market Data & Fundamentals
             try:
-                hist, fund_df = self.fetch_market_data(yahoo_ticker)
+                hist, fund_df = self.fetch_market_data(yahoo_ticker, fetch_timestamp)
                 if hist.empty:
                     logging.warning(f"No price data found for {symbol}. Skipping.")
                     continue
@@ -215,6 +217,7 @@ class IndianStockPipeline:
 
                 # Save Price Data
                 hist['Symbol'] = symbol
+                hist['Date_Collected'] = fetch_timestamp
                 hist.reset_index(inplace=True)
                 # Convert datetime with timezone to string to save to sqlite safely
                 hist['Date'] = hist['Date'].dt.strftime('%Y-%m-%d')
@@ -252,6 +255,7 @@ class IndianStockPipeline:
                         'Symbol': symbol,
                         'Year': year,
                         'Date': doc['Published'],
+                        'Date_Collected': fetch_timestamp,
                         'Source': doc['Source'],
                         'Doc_Type': doc['Doc_Type'],
                         'Vader_Compound': v_comp,
@@ -273,7 +277,8 @@ class IndianStockPipeline:
                 'Price_Data_End': hist['Date'].max(),
                 'Total_Trading_Days': len(hist),
                 'Has_Fundamentals': not fund_df.empty,
-                'Documents_Processed': total_documents_found
+                'Documents_Processed': total_documents_found,
+                'Date_Collected': fetch_timestamp
             })
 
             count += 1
