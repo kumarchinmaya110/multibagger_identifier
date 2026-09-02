@@ -56,7 +56,7 @@ class IndianStockPipeline:
 
         # FinBERT for financial sentiment
         try:
-            self.finbert = pipeline("sentiment-analysis", model="ProsusAI/finbert", device=-1)
+            self.finbert = pipeline("sentiment-analysis", model="ProsusAI/finbert", device=-1, framework="pt")
         except Exception as e:
             logging.warning(f"Failed to load FinBERT, falling back to VADER only: {e}")
             self.finbert = None
