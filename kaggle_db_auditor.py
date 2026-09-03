@@ -161,9 +161,9 @@ if __name__ == "__main__":
     import os
 
     parser = argparse.ArgumentParser(description="Audit Indian Stocks Database")
-    parser.add_argument('--db', type=str, default='indian_stocks_data.db', help='Path to the SQLite database')
+    parser.add_argument('--db', type=str, default='user_db.db', help='Path to the SQLite database')
     parser.add_argument('--output', type=str, default='Database_Audit_Report.xlsx', help='Output Excel path')
-    parser.add_argument('--download_gdrive_id', type=str, default=None, help='Google Drive File ID to download the DB from before auditing')
+    parser.add_argument('--download_gdrive_id', type=str, default='1aCi1veb7a3lKWZBmcRmBZ2cd-6HodJEZ', help='Google Drive File ID to download the DB from before auditing')
     args, unknown = parser.parse_known_args()
 
     if args.download_gdrive_id:
