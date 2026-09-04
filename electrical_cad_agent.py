@@ -1,9 +1,32 @@
 import argparse
-import cv2
-import numpy as np
-import ezdxf
 import logging
+import sys
+import subprocess
 from pathlib import Path
+
+def install_package(package):
+    """Installs a python package using pip."""
+    logging.info(f"Installing {package}...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+# Attempt to import required dependencies, install if missing
+try:
+    import cv2
+except ImportError:
+    install_package("opencv-python-headless")
+    import cv2
+
+try:
+    import numpy as np
+except ImportError:
+    install_package("numpy")
+    import numpy as np
+
+try:
+    import ezdxf
+except ImportError:
+    install_package("ezdxf")
+    import ezdxf
 
 # Optional imports for OCR and advanced models
 try:
@@ -179,20 +202,35 @@ class ElectricalCADAgent:
 
         self.export_to_dxf(lines, texts, symbols, output_dxf_path, img_height)
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Convert scanned electrical drawing to DXF CAD format.")
-    parser.add_argument("input_image", type=str, help="Path to the input scanned drawing image.")
-    parser.add_argument("output_dxf", type=str, help="Path to save the output DXF file.")
-    parser.add_argument("--use_easyocr", action="store_true", help="Use EasyOCR instead of PyTesseract.")
-    parser.add_argument("--yolo_model", type=str, default=None, help="Path to YOLO model for symbol detection.")
-
-    # parse_known_args used to prevent crashes from injected kernel arguments in Jupyter/Kaggle environments
-    args, _ = parser.parse_known_args()
-
-    agent = ElectricalCADAgent(use_easyocr=args.use_easyocr, yolo_model_path=args.yolo_model)
-
+def is_notebook():
     try:
-        agent.process_drawing(args.input_image, args.output_dxf)
-        print(f"Successfully converted {args.input_image} to {args.output_dxf}")
-    except Exception as e:
-        logging.error(f"Error processing drawing: {e}")
+        shell = get_ipython().__class__.__name__
+        if shell == 'ZMQInteractiveShell':
+            return True   # Jupyter notebook or qtconsole
+        elif shell == 'TerminalInteractiveShell':
+            return False  # Terminal running IPython
+        else:
+            return False  # Other type (?)
+    except NameError:
+        return False      # Probably standard Python interpreter
+
+if __name__ == "__main__":
+    if is_notebook():
+        logging.info("Running in a notebook environment. Skipping CLI argument parsing.")
+        logging.info("To use the agent, instantiate ElectricalCADAgent and call process_drawing('input.png', 'output.dxf').")
+    else:
+        parser = argparse.ArgumentParser(description="Convert scanned electrical drawing to DXF CAD format.")
+        parser.add_argument("input_image", type=str, help="Path to the input scanned drawing image.")
+        parser.add_argument("output_dxf", type=str, help="Path to save the output DXF file.")
+        parser.add_argument("--use_easyocr", action="store_true", help="Use EasyOCR instead of PyTesseract.")
+        parser.add_argument("--yolo_model", type=str, default=None, help="Path to YOLO model for symbol detection.")
+
+        args = parser.parse_args()
+
+        agent = ElectricalCADAgent(use_easyocr=args.use_easyocr, yolo_model_path=args.yolo_model)
+
+        try:
+            agent.process_drawing(args.input_image, args.output_dxf)
+            print(f"Successfully converted {args.input_image} to {args.output_dxf}")
+        except Exception as e:
+            logging.error(f"Error processing drawing: {e}")
