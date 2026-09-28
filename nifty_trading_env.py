@@ -74,13 +74,15 @@ class NiftyTradingEnv(gym.Env):
             if self.current_position == 1:
                 # Close Long
                 pnl = current_price - self.entry_price
-                reward += pnl
+                prev_price = self.df.iloc[self.current_step - 1]['close']
+                reward += (current_price - prev_price)  # Only add final step delta to avoid double counting
                 trade_info = {'type': 'close_long', 'price': current_price, 'pnl': pnl, 'step': self.current_step}
                 self.history.append(trade_info)
             elif self.current_position == -1:
                 # Close Short
                 pnl = self.entry_price - current_price
-                reward += pnl
+                prev_price = self.df.iloc[self.current_step - 1]['close']
+                reward += (prev_price - current_price) # Only add final step delta to avoid double counting
                 trade_info = {'type': 'close_short', 'price': current_price, 'pnl': pnl, 'step': self.current_step}
                 self.history.append(trade_info)
 

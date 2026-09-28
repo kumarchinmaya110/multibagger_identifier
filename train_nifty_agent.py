@@ -9,6 +9,9 @@ def load_and_preprocess_data(filepath, train_split=0.8):
     df = pd.read_csv(filepath)
 
     print("Preprocessing data...")
+    # Standardize column names to lowercase
+    df.columns = df.columns.str.lower()
+
     # Convert date to datetime
     df['date'] = pd.to_datetime(df['date'], format='%d-%m-%Y %H:%M', errors='coerce')
     df = df.dropna(subset=['date'])
