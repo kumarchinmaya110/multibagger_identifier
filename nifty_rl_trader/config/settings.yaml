@@ -1,0 +1,33 @@
+settings:
+  data_paths:
+    raw_data: "nifty_rl_trader/data/raw/NIFTY 50_minute.csv"
+    processed_data: "nifty_rl_trader/data/processed/"
+
+  rl_agent:
+    frame_stack: 30
+    model_type: "PPO"
+    hyperparameters:
+      learning_rate: 0.0003
+      n_steps: 2048
+      batch_size: 64
+      n_epochs: 10
+      gamma: 0.99
+      gae_lambda: 0.95
+      clip_range: 0.2
+      ent_coef: 0.01
+
+  env:
+    slippage: 1.0  # Slippage per trade (points)
+    brokerage_per_order: 20.0 # INR
+    stt_rate_sell: 0.000125 # 0.0125% for futures sell (current STT for futures as of 2024 is 0.0125%)
+    exchange_charges: 0.000019 # approx 0.0019% NSE turnover charge
+    gst_rate: 0.18 # 18% on brokerage + exchange
+    sebi_charges: 0.000001 # approx 10 per crore
+    lot_size: 25 # Current Nifty 50 lot size is 25 (it recently changed from 50)
+    intraday_square_off: "15:15"
+    initial_balance: 100000.0 # Initial capital in INR
+    max_drawdown_pts: 200 # Max intraday drawdown points violation limit
+
+  paper_trade:
+    mock_start_date: "2026-01-01"
+    mock_end_date: "2026-12-31"
