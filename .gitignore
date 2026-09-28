@@ -1,0 +1,6 @@
+data/
+nifty_rl_trader/data/
+*.xlsx
+nifty_rl_trader/saved_models/
+*.pyc
+__pycache__/
