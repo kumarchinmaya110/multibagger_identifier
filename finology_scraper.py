@@ -1,14 +1,28 @@
 import io
 import time
-import requests
+import requests # standard requests for NSE CSV
 import pandas as pd
 import re
 from bs4 import BeautifulSoup
 import logging
-import urllib.request
 import argparse
+import subprocess
+import sys
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def ensure_dependencies():
+    packages = ["curl_cffi", "openpyxl"]
+    for pkg in packages:
+        try:
+            __import__(pkg)
+        except ImportError:
+            logging.info(f"{pkg} not found. Installing it...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
+            logging.info(f"Successfully installed {pkg}.")
+
+ensure_dependencies()
+from curl_cffi import requests as cffi_requests
 
 def get_nse_symbols():
     url = "https://archives.nseindia.com/content/equities/EQUITY_L.csv"
@@ -157,11 +171,6 @@ def parse_html(html, symbol):
 
 def scrape_symbol(symbol, use_wayback=False):
     url = f"https://ticker.finology.in/company/{symbol}"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-    }
 
     empty_data = {'Symbol': symbol, 'Finstar Rating': 'NA', 'Sector': 'NA', 'Market Cap': 'NA', 'Enterprise Value': 'NA', 'P/E': 'NA', 'P/B': 'NA', 'Debt': 'NA', 'Promoter Holding': 'NA', 'EPS': 'NA', 'Sales Growth (1yr)': 'NA', 'Sales Growth (3yr)': 'NA', 'Sales Growth (5yr)': 'NA', 'ROE (1yr)': 'NA', 'ROE (3yr)': 'NA', 'ROE (5yr)': 'NA', 'ROCE (1yr)': 'NA', 'ROCE (3yr)': 'NA', 'ROCE (5yr)': 'NA', 'Profit Growth (1yr)': 'NA', 'Profit Growth (3yr)': 'NA', 'Profit Growth (5yr)': 'NA', 'Strengths': 'NA', 'Limitations': 'NA'}
     for i in range(5):
@@ -170,35 +179,37 @@ def scrape_symbol(symbol, use_wayback=False):
 
     try:
         if not use_wayback:
-            response = requests.get(url, headers=headers, timeout=10)
+            # Using curl_cffi to impersonate chrome and bypass Cloudflare WAF
+            response = cffi_requests.get(url, impersonate="chrome", timeout=15)
             if response.status_code == 200:
                 return parse_html(response.text, symbol)
-            elif response.status_code == 403:
-                logging.warning(f"403 Forbidden for {symbol}, falling back to Wayback Machine.")
-                use_wayback = True
+            elif response.status_code in [403, 404]:
+                logging.warning(f"HTTP {response.status_code} for {symbol}. Stock may not exist or blocked.")
+                # We can optionally fallback to wayback if it's 403, but 404 means it's not found on the site.
+                if response.status_code == 403:
+                    use_wayback = True
             else:
                 logging.warning(f"Failed to fetch {symbol}: HTTP {response.status_code}")
                 return empty_data
 
         if use_wayback:
             wayback_url = f"https://web.archive.org/web/20230601000000/{url}"
+            # Wayback machine doesn't need cloudflare bypass, standard requests is fine but cffi is okay too
             response_wb = requests.get(wayback_url, timeout=15)
             if response_wb.status_code == 200:
                  return parse_html(response_wb.text, symbol)
             else:
                  logging.warning(f"Wayback Machine also failed for {symbol}: HTTP {response_wb.status_code}")
 
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Network exception fetching {symbol}: {e}")
     except Exception as e:
-        logging.error(f"Error parsing data for {symbol}: {e}")
+        logging.error(f"Error processing data for {symbol}: {e}")
 
     return empty_data
 
 def main():
     parser = argparse.ArgumentParser(description="Scrape stock data from Finology Ticker.")
     parser.add_argument('--limit', type=int, default=None, help='Limit the number of stocks to scrape (for testing).')
-    parser.add_argument('--wayback', action='store_true', help='Force using Wayback Machine API (useful if IP is blocked).')
+    parser.add_argument('--wayback', action='store_true', help='Force using Wayback Machine API (useful if live site is permanently blocked).')
 
     args, _ = parser.parse_known_args()
 
@@ -214,16 +225,22 @@ def main():
     all_data = []
     total = len(symbols)
 
+    output_file = 'finology_stocks_data.xlsx'
     for idx, sym in enumerate(symbols, 1):
         logging.info(f"Scraping data for {sym} ({idx}/{total})...")
         data = scrape_symbol(sym, use_wayback=args.wayback)
         all_data.append(data)
+
+        # Save incrementally every 50 stocks to avoid data loss if it crashes
+        if idx % 50 == 0:
+            pd.DataFrame(all_data).to_excel(output_file, index=False)
+            logging.info(f"Incremental save completed at stock {idx}.")
+
         time.sleep(1) # Polite delay between requests
 
     df = pd.DataFrame(all_data)
-    output_file = 'finology_stocks_data.xlsx'
     df.to_excel(output_file, index=False)
-    logging.info(f"Scraping completed. Data saved to {output_file}")
+    logging.info(f"Scraping completed. Final data saved to {output_file}")
 
 if __name__ == "__main__":
     main()
